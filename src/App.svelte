@@ -12,7 +12,41 @@
   } from "./lib/posture";
   import { startAlarm, stopAlarm } from "./lib/sound";
 
-  type AppState = "idle" | "calibrating" | "monitoring";
+  interface SavedConfig {
+    id: string;
+    name: string;
+    cameraPosition: CameraPosition;
+    checkInterval: number;
+    baseline: CalibrationData;
+    createdAt: number;
+  }
+
+  const STORAGE_KEY = "watchyoursit-configs";
+
+  function loadConfigs(): SavedConfig[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  }
+
+  function saveConfigs(configs: SavedConfig[]) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(configs));
+  }
+
+  function deleteConfig(id: string) {
+    const configs = loadConfigs().filter(c => c.id !== id);
+    saveConfigs(configs);
+    savedConfigs = configs;
+  }
+
+  const CAM_POS_LABELS: Record<CameraPosition, string> = {
+    left: "좌측",
+    front: "정면",
+    right: "우측",
+  };
+
+  type AppState = "idle" | "new-config" | "pick-config" | "calibrating" | "monitoring";
 
   let state: AppState = $state("idle");
   let cameraReady = $state(false);
@@ -20,10 +54,12 @@
   let countdown = $state(3);
   let checkInterval = $state(5);
   let cameraPosition: CameraPosition = $state("front");
+  let configName = $state("");
   let messages: ChatMessage[] = $state([]);
   let postureStatus: "neutral" | "warning" | "good" = $state("neutral");
   let paused = $state(false);
   let privacyMode = $state(false);
+  let savedConfigs: SavedConfig[] = $state(loadConfigs());
 
   let calibrationSamples: PostureMetrics[] = [];
   let baseline: CalibrationData | null = null;
@@ -40,6 +76,7 @@
   let lastCheckTimestamp = 0;
 
   const POSTURE_LABELS: Record<string, string> = {
+    "forward-lean": "앞으로 기울어짐",
     "forward-head": "거북목",
     "shoulder-tilt": "어깨 비대칭",
     "head-tilt": "머리 기울임",
@@ -66,7 +103,6 @@
     const deltaSec = Math.round((now - lastCheckTimestamp) / 1000);
     lastCheckTimestamp = now;
 
-    // Add time to types that were active since last check
     for (const type of activeWarningTypes) {
       const existing = stats.find((s) => s.type === type);
       if (existing) {
@@ -74,7 +110,6 @@
       }
     }
 
-    // Update active types and counts
     const newTypes = new Set(warningTypes);
     for (const type of warningTypes) {
       let existing = stats.find((s) => s.type === type);
@@ -87,14 +122,13 @@
         });
         existing = stats[stats.length - 1];
       }
-      // Count a new occurrence if this type wasn't active before
       if (!activeWarningTypes.has(type)) {
         existing.count++;
       }
     }
 
     activeWarningTypes = newTypes;
-    stats = [...stats]; // trigger reactivity
+    stats = [...stats];
   }
 
   function now(): string {
@@ -113,6 +147,28 @@
     errorMsg = msg;
   }
 
+  function goNewConfig() {
+    state = "new-config";
+    configName = "";
+    cameraPosition = "front";
+    checkInterval = 5;
+  }
+
+  function goPickConfig() {
+    savedConfigs = loadConfigs();
+    state = "pick-config";
+  }
+
+  function loadSavedConfig(config: SavedConfig) {
+    configName = config.name;
+    cameraPosition = config.cameraPosition;
+    checkInterval = config.checkInterval;
+    baseline = config.baseline;
+    state = "monitoring";
+    startElapsedTimer();
+    addMessage("info", `"${config.name}" 설정으로 모니터링을 시작합니다.`);
+  }
+
   function startCalibration() {
     state = "calibrating";
     calibrationSamples = [];
@@ -125,11 +181,26 @@
         setTimeout(() => {
           if (calibrationSamples.length > 0) {
             baseline = calibrate(calibrationSamples);
+
+            // Save to localStorage
+            const newConfig: SavedConfig = {
+              id: crypto.randomUUID(),
+              name: configName || "이름 없음",
+              cameraPosition,
+              checkInterval,
+              baseline,
+              createdAt: Date.now(),
+            };
+            const configs = loadConfigs();
+            configs.unshift(newConfig);
+            saveConfigs(configs);
+            savedConfigs = configs;
+
             state = "monitoring";
             startElapsedTimer();
             addMessage("info", "캘리브레이션 완료! 자세 모니터링을 시작합니다.");
           } else {
-            state = "idle";
+            state = "new-config";
             errorMsg = "캘리브레이션 실패: 자세를 감지할 수 없습니다.";
           }
         }, 3000);
@@ -173,7 +244,7 @@
     }
   }
 
-  function recalibrate() {
+  function goHome() {
     state = "idle";
     baseline = null;
     messages = [];
@@ -182,6 +253,7 @@
     lastWarningKey = "";
     postureStatus = "neutral";
     paused = false;
+    privacyMode = false;
     stopAlarm();
     stopElapsedTimer();
     stats = [];
@@ -205,6 +277,9 @@
     messages = [];
   }
 
+  function formatInterval(sec: number): string {
+    return sec === 0 ? "연속" : sec < 60 ? `${sec}초` : `${sec / 60}분`;
+  }
 </script>
 
 <div class="layout">
@@ -230,9 +305,26 @@
     />
 
     {#if state === "idle"}
+      <div class="choose-buttons">
+        <button class="choose-btn" onclick={goNewConfig}>
+          <span class="choose-icon">+</span>
+          <span class="choose-label">새 설정</span>
+          <span class="choose-desc">캘리브레이션을 새로 진행합니다</span>
+        </button>
+        <button class="choose-btn" onclick={goPickConfig} disabled={loadConfigs().length === 0}>
+          <span class="choose-icon">↻</span>
+          <span class="choose-label">기존 설정</span>
+          <span class="choose-desc">{loadConfigs().length > 0 ? '저장된 설정을 불러옵니다' : '저장된 설정이 없습니다'}</span>
+        </button>
+      </div>
+
+    {:else if state === "new-config"}
       <div class="controls">
-        <p class="hint">올바른 자세를 취한 후 캘리브레이션을 시작하세요.</p>
-        <div class="settings-row">
+        <div class="config-form">
+          <div class="setting">
+            <label for="config-name">설정 이름</label>
+            <input id="config-name" type="text" bind:value={configName} placeholder="예: 사무실, 카페" />
+          </div>
           <div class="setting">
             <label for="cam-pos">카메라 위치</label>
             <select id="cam-pos" bind:value={cameraPosition}>
@@ -255,10 +347,31 @@
             </select>
           </div>
         </div>
-        <button onclick={startCalibration} disabled={!cameraReady}>
-          {cameraReady ? "캘리브레이션 시작" : "카메라 로딩 중..."}
-        </button>
+        <p class="hint">올바른 자세를 취한 후 캘리브레이션을 시작하세요.</p>
+        <div class="btn-row">
+          <button class="btn-back" onclick={() => state = 'idle'}>뒤로</button>
+          <button onclick={startCalibration} disabled={!cameraReady}>
+            {cameraReady ? "캘리브레이션 시작" : "카메라 로딩 중..."}
+          </button>
+        </div>
       </div>
+
+    {:else if state === "pick-config"}
+      <div class="config-list">
+        {#each savedConfigs as config (config.id)}
+          <div class="config-item">
+            <button class="config-select" onclick={() => loadSavedConfig(config)}>
+              <span class="config-name">{config.name}</span>
+              <span class="config-meta">
+                {CAM_POS_LABELS[config.cameraPosition]} · {formatInterval(config.checkInterval)}
+              </span>
+            </button>
+            <button class="config-delete" onclick={() => deleteConfig(config.id)}>×</button>
+          </div>
+        {/each}
+      </div>
+      <button class="btn-back" onclick={() => state = 'idle'}>뒤로</button>
+
     {:else if state === "calibrating"}
       <div class="calibration-status">
         {#if countdown > 0}
@@ -280,7 +393,7 @@
           <button onclick={togglePause} class="btn-pause">
             {paused ? '재개' : '일시정지'}
           </button>
-          <button onclick={recalibrate} class="btn-recal">재캘리브레이션</button>
+          <button onclick={goHome} class="btn-recal">처음으로</button>
         </div>
       </div>
     {/if}
@@ -370,6 +483,57 @@
     width: 100%;
     text-align: center;
   }
+
+  /* Choose screen */
+  .choose-buttons {
+    display: flex;
+    gap: 1rem;
+    width: 100%;
+  }
+  .choose-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1.5rem 1rem;
+    background: #141414;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .choose-btn:hover:not(:disabled) {
+    background: #1a1a1a;
+    border-color: #444;
+  }
+  .choose-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+  .choose-icon {
+    font-size: 2rem;
+    color: #888;
+    line-height: 1;
+  }
+  .choose-label {
+    font-size: 1.1rem;
+    color: #ccc;
+    font-weight: 500;
+  }
+  .choose-desc {
+    font-size: 0.8rem;
+    color: #555;
+  }
+
+  /* Config form */
+  .config-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: 100%;
+    max-width: 360px;
+  }
   .controls {
     display: flex;
     flex-direction: column;
@@ -381,31 +545,101 @@
     margin: 0;
     font-size: 0.9rem;
   }
-  .settings-row {
-    display: flex;
-    gap: 1.25rem;
-  }
   .setting {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    justify-content: space-between;
+    gap: 0.75rem;
     font-size: 0.9rem;
   }
   .setting label {
     color: #555;
+    flex-shrink: 0;
   }
-  .setting select {
+  .setting select,
+  .setting input {
     background: #141414;
     color: #aaa;
     border: 1px solid #2a2a2a;
     border-radius: 6px;
-    padding: 0.35rem 0.5rem;
+    padding: 0.4rem 0.6rem;
     font-size: 0.9rem;
+    flex: 1;
+    min-width: 0;
+  }
+  .setting input::placeholder {
+    color: #444;
   }
   .interval-label {
     color: #555;
     font-size: 0.85rem;
   }
+
+  /* Config list */
+  .config-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+  .config-item {
+    display: flex;
+    align-items: center;
+    background: #141414;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    overflow: hidden;
+    transition: all 0.2s;
+  }
+  .config-item:hover {
+    border-color: #444;
+  }
+  .config-select {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    background: none;
+    border: none;
+    border-radius: 0;
+    cursor: pointer;
+    text-align: left;
+  }
+  .config-select:hover {
+    background: #1a1a1a;
+  }
+  .config-name {
+    font-size: 0.95rem;
+    color: #ccc;
+    font-weight: 500;
+    flex: 1;
+  }
+  .config-meta {
+    font-size: 0.8rem;
+    color: #555;
+    flex-shrink: 0;
+  }
+  .config-delete {
+    background: none;
+    border: none;
+    border-left: 1px solid #2a2a2a;
+    color: #444;
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 0.85rem 0.75rem;
+    line-height: 1;
+    flex-shrink: 0;
+    border-radius: 0;
+  }
+  .config-delete:hover {
+    color: #ff4444;
+    background: rgba(255, 68, 68, 0.05);
+  }
+
+  /* Buttons */
   button {
     padding: 0.75rem 1.5rem;
     font-size: 1rem;
@@ -429,6 +663,17 @@
   .btn-row {
     display: flex;
     gap: 0.75rem;
+  }
+  .btn-back {
+    background: transparent;
+    border: 1px solid #333;
+    color: #555;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+  }
+  .btn-back:hover {
+    border-color: #555;
+    color: #999;
   }
   .btn-pause {
     background: transparent;

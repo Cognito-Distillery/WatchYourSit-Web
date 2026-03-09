@@ -13,6 +13,8 @@ export interface FrontMetrics {
   headTilt: number;
   /** Ear-shoulder distance / shoulder width */
   earShoulderDistRatio: number;
+  /** Shoulder width in normalized coords (increases when leaning forward) */
+  shoulderWidth: number;
 }
 
 /** Side view metrics: x-axis displacement + partial symmetry */
@@ -28,6 +30,8 @@ export interface SideMetrics {
   shoulderTilt: number;
   /** Left ear y - right ear y */
   headTilt: number;
+  /** Shoulder center X position (shifts when whole body leans forward) */
+  shoulderCenterX: number;
 }
 
 export type PostureMetrics = FrontMetrics | SideMetrics;
@@ -35,7 +39,7 @@ export type PostureMetrics = FrontMetrics | SideMetrics;
 export type CalibrationData = PostureMetrics;
 
 export interface PostureWarning {
-  type: "forward-head" | "shoulder-tilt" | "head-tilt" | "slouch";
+  type: "forward-head" | "shoulder-tilt" | "head-tilt" | "slouch" | "forward-lean";
   label: string;
   severity: number; // 0-1
 }
@@ -74,13 +78,11 @@ export function computeMetrics(
       shoulderTilt: leftShoulder.y - rightShoulder.y,
       headTilt: leftEar.y - rightEar.y,
       earShoulderDistRatio: shoulderWidth > 0 ? earShoulderDist / shoulderWidth : 0,
+      shoulderWidth,
     };
   }
 
   // Side view (left or right)
-  // For left camera: user faces right, ear forward = ear.x < shoulder.x
-  // For right camera: user faces left, ear forward = ear.x > shoulder.x
-  // We normalize so positive = forward
   const sign = cameraPosition === "left" ? -1 : 1;
   return {
     view: "side",
@@ -89,6 +91,7 @@ export function computeMetrics(
     noseEarYDiff: nose.y - earY,
     shoulderTilt: leftShoulder.y - rightShoulder.y,
     headTilt: leftEar.y - rightEar.y,
+    shoulderCenterX: sign * shoulderX,
   };
 }
 
@@ -103,6 +106,7 @@ export function calibrate(samples: PostureMetrics[]): CalibrationData {
       shoulderTilt: fronts.reduce((s, m) => s + m.shoulderTilt, 0) / n,
       headTilt: fronts.reduce((s, m) => s + m.headTilt, 0) / n,
       earShoulderDistRatio: fronts.reduce((s, m) => s + m.earShoulderDistRatio, 0) / n,
+      shoulderWidth: fronts.reduce((s, m) => s + m.shoulderWidth, 0) / n,
     };
   }
 
@@ -114,6 +118,7 @@ export function calibrate(samples: PostureMetrics[]): CalibrationData {
     noseEarYDiff: sides.reduce((s, m) => s + m.noseEarYDiff, 0) / n,
     shoulderTilt: sides.reduce((s, m) => s + m.shoulderTilt, 0) / n,
     headTilt: sides.reduce((s, m) => s + m.headTilt, 0) / n,
+    shoulderCenterX: sides.reduce((s, m) => s + m.shoulderCenterX, 0) / n,
   };
 }
 
@@ -124,6 +129,7 @@ const FRONT_TH = {
   shoulderTilt: 0.02, // absolute y diff
   headTilt: 0.02,     // absolute y diff
   slouch: 0.15,       // earShoulderDistRatio decrease ratio
+  forwardLean: 0.12,  // shoulderWidth increase ratio (12% = noticeably closer)
 };
 
 const SIDE_TH = {
@@ -132,6 +138,7 @@ const SIDE_TH = {
   headDrop: 0.03,      // nose-ear y diff increase (absolute)
   shoulderTilt: 0.035, // relaxed vs front (45deg perspective)
   headTilt: 0.035,     // relaxed vs front
+  forwardLean: 0.04,   // shoulder center X shift (absolute, normalized coords)
 };
 
 export function analyzePosture(
@@ -151,6 +158,16 @@ export function analyzePosture(
 
 function analyzeFront(m: FrontMetrics, b: FrontMetrics): PostureWarning[] {
   const warnings: PostureWarning[] = [];
+
+  // Forward lean: shoulder width increased (person moved closer to camera)
+  const widthIncrease = m.shoulderWidth - b.shoulderWidth;
+  if (widthIncrease > FRONT_TH.forwardLean * b.shoulderWidth) {
+    warnings.push({
+      type: "forward-lean",
+      label: "앞으로 기울어짐!",
+      severity: Math.min(1, widthIncrease / (b.shoulderWidth * FRONT_TH.forwardLean * 2)),
+    });
+  }
 
   // Forward head: vertical gap decreased
   const gapDrop = b.earShoulderYGap - m.earShoulderYGap;
@@ -197,6 +214,16 @@ function analyzeFront(m: FrontMetrics, b: FrontMetrics): PostureWarning[] {
 
 function analyzeSide(m: SideMetrics, b: SideMetrics): PostureWarning[] {
   const warnings: PostureWarning[] = [];
+
+  // Forward lean: whole body shifted forward (shoulder center X moved)
+  const xShift = m.shoulderCenterX - b.shoulderCenterX;
+  if (xShift > SIDE_TH.forwardLean) {
+    warnings.push({
+      type: "forward-lean",
+      label: "앞으로 기울어짐!",
+      severity: Math.min(1, xShift / (SIDE_TH.forwardLean * 3)),
+    });
+  }
 
   // Forward head: ear moved forward relative to shoulder (x offset increased)
   const xIncrease = m.earShoulderXOffset - b.earShoulderXOffset;
