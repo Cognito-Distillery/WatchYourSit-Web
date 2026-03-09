@@ -48,6 +48,41 @@ function avg(a: number, b: number): number {
   return (a + b) / 2;
 }
 
+// EMA smoothing: lower alpha = more smoothing (0.0–1.0)
+const SMOOTH_ALPHA = 0.5;
+let smoothedMetrics: PostureMetrics | null = null;
+
+function smoothValue(prev: number, next: number): number {
+  return prev + SMOOTH_ALPHA * (next - prev);
+}
+
+function smoothFront(prev: FrontMetrics, next: FrontMetrics): FrontMetrics {
+  return {
+    view: "front",
+    earShoulderYGap: smoothValue(prev.earShoulderYGap, next.earShoulderYGap),
+    shoulderTilt: smoothValue(prev.shoulderTilt, next.shoulderTilt),
+    headTilt: smoothValue(prev.headTilt, next.headTilt),
+    earShoulderDistRatio: smoothValue(prev.earShoulderDistRatio, next.earShoulderDistRatio),
+    shoulderWidth: smoothValue(prev.shoulderWidth, next.shoulderWidth),
+  };
+}
+
+function smoothSide(prev: SideMetrics, next: SideMetrics): SideMetrics {
+  return {
+    view: "side",
+    earShoulderXOffset: smoothValue(prev.earShoulderXOffset, next.earShoulderXOffset),
+    earShoulderYGap: smoothValue(prev.earShoulderYGap, next.earShoulderYGap),
+    noseEarYDiff: smoothValue(prev.noseEarYDiff, next.noseEarYDiff),
+    shoulderTilt: smoothValue(prev.shoulderTilt, next.shoulderTilt),
+    headTilt: smoothValue(prev.headTilt, next.headTilt),
+    shoulderCenterX: smoothValue(prev.shoulderCenterX, next.shoulderCenterX),
+  };
+}
+
+export function resetSmoothing() {
+  smoothedMetrics = null;
+}
+
 export function computeMetrics(
   landmarks: NormalizedLandmark[],
   cameraPosition: CameraPosition
@@ -67,12 +102,14 @@ export function computeMetrics(
   const shoulderX = avg(leftShoulder.x, rightShoulder.x);
   const shoulderY = avg(leftShoulder.y, rightShoulder.y);
 
+  let raw: PostureMetrics;
+
   if (cameraPosition === "front") {
     const shoulderWidth = Math.abs(leftShoulder.x - rightShoulder.x);
     const earShoulderDist = Math.sqrt(
       (earX - shoulderX) ** 2 + (earY - shoulderY) ** 2
     );
-    return {
+    raw = {
       view: "front",
       earShoulderYGap: shoulderY - earY,
       shoulderTilt: leftShoulder.y - rightShoulder.y,
@@ -80,19 +117,29 @@ export function computeMetrics(
       earShoulderDistRatio: shoulderWidth > 0 ? earShoulderDist / shoulderWidth : 0,
       shoulderWidth,
     };
+  } else {
+    const sign = cameraPosition === "left" ? -1 : 1;
+    raw = {
+      view: "side",
+      earShoulderXOffset: sign * (earX - shoulderX),
+      earShoulderYGap: shoulderY - earY,
+      noseEarYDiff: nose.y - earY,
+      shoulderTilt: leftShoulder.y - rightShoulder.y,
+      headTilt: leftEar.y - rightEar.y,
+      shoulderCenterX: sign * shoulderX,
+    };
   }
 
-  // Side view (left or right)
-  const sign = cameraPosition === "left" ? -1 : 1;
-  return {
-    view: "side",
-    earShoulderXOffset: sign * (earX - shoulderX),
-    earShoulderYGap: shoulderY - earY,
-    noseEarYDiff: nose.y - earY,
-    shoulderTilt: leftShoulder.y - rightShoulder.y,
-    headTilt: leftEar.y - rightEar.y,
-    shoulderCenterX: sign * shoulderX,
-  };
+  // Apply EMA smoothing
+  if (!smoothedMetrics || smoothedMetrics.view !== raw.view) {
+    smoothedMetrics = raw;
+  } else if (raw.view === "front" && smoothedMetrics.view === "front") {
+    smoothedMetrics = smoothFront(smoothedMetrics, raw);
+  } else if (raw.view === "side" && smoothedMetrics.view === "side") {
+    smoothedMetrics = smoothSide(smoothedMetrics, raw);
+  }
+
+  return smoothedMetrics;
 }
 
 export function calibrate(samples: PostureMetrics[]): CalibrationData {
@@ -125,19 +172,19 @@ export function calibrate(samples: PostureMetrics[]): CalibrationData {
 // --- Thresholds ---
 
 const FRONT_TH = {
-  forwardHead: 0.15,  // earShoulderYGap decrease ratio
-  shoulderTilt: 0.02, // absolute y diff
-  headTilt: 0.02,     // absolute y diff
+  forwardHead: 0.10,  // earShoulderYGap decrease ratio (lowered from 0.15 for sensitivity)
+  shoulderTilt: 0.035, // absolute y diff (raised from 0.02 to reduce noise)
+  headTilt: 0.03,      // absolute y diff (raised from 0.02 to reduce noise)
   slouch: 0.15,       // earShoulderDistRatio decrease ratio
   forwardLean: 0.12,  // shoulderWidth increase ratio (12% = noticeably closer)
 };
 
 const SIDE_TH = {
-  forwardHead: 0.03,   // x-offset increase (absolute)
+  forwardHead: 0.02,   // x-offset increase (absolute, lowered from 0.03)
   slouch: 0.15,        // earShoulderYGap decrease ratio
   headDrop: 0.03,      // nose-ear y diff increase (absolute)
-  shoulderTilt: 0.035, // relaxed vs front (45deg perspective)
-  headTilt: 0.035,     // relaxed vs front
+  shoulderTilt: 0.04,  // relaxed vs front (raised from 0.035)
+  headTilt: 0.04,      // relaxed vs front (raised from 0.035)
   forwardLean: 0.04,   // shoulder center X shift (absolute, normalized coords)
 };
 

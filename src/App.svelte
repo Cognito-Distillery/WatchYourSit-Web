@@ -6,6 +6,7 @@
   import {
     calibrate,
     analyzePosture,
+    resetSmoothing,
     type PostureMetrics,
     type CalibrationData,
     type CameraPosition,
@@ -164,6 +165,7 @@
     cameraPosition = config.cameraPosition;
     checkInterval = config.checkInterval;
     baseline = config.baseline;
+    resetSmoothing();
     state = "monitoring";
     startElapsedTimer();
     addMessage("info", `"${config.name}" 설정으로 모니터링을 시작합니다.`);
@@ -173,6 +175,7 @@
     state = "calibrating";
     calibrationSamples = [];
     countdown = 3;
+    resetSmoothing();
 
     const interval = setInterval(() => {
       countdown--;
@@ -247,6 +250,7 @@
   function goHome() {
     state = "idle";
     baseline = null;
+    resetSmoothing();
     messages = [];
     msgId = 0;
     wasWarning = false;
