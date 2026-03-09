@@ -198,10 +198,10 @@
 
             state = "monitoring";
             startElapsedTimer();
-            addMessage("info", "캘리브레이션 완료! 자세 모니터링을 시작합니다.");
+            addMessage("info", "기준 자세 등록 완료! 모니터링을 시작합니다.");
           } else {
             state = "new-config";
-            errorMsg = "캘리브레이션 실패: 자세를 감지할 수 없습니다.";
+            errorMsg = "등록 실패: 자세를 감지할 수 없습니다. 카메라에 상체가 보이는지 확인하세요.";
           }
         }, 3000);
       }
@@ -280,6 +280,18 @@
   function formatInterval(sec: number): string {
     return sec === 0 ? "연속" : sec < 60 ? `${sec}초` : `${sec / 60}분`;
   }
+
+  function formatDate(ts: number): string {
+    const d = new Date(ts);
+    return d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" })
+      + " " + d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  const CAM_POS_DESC: Record<CameraPosition, string> = {
+    left: "카메라가 내 왼쪽에 위치",
+    front: "카메라가 정면에 위치",
+    right: "카메라가 내 오른쪽에 위치",
+  };
 </script>
 
 <div class="layout">
@@ -305,16 +317,17 @@
     />
 
     {#if state === "idle"}
+      <p class="intro">카메라로 자세를 분석해 거북목, 구부정한 자세 등을 알려드립니다.</p>
       <div class="choose-buttons">
         <button class="choose-btn" onclick={goNewConfig}>
           <span class="choose-icon">+</span>
           <span class="choose-label">새 설정</span>
-          <span class="choose-desc">캘리브레이션을 새로 진행합니다</span>
+          <span class="choose-desc">기준 자세를 새로 등록합니다</span>
         </button>
         <button class="choose-btn" onclick={goPickConfig} disabled={loadConfigs().length === 0}>
           <span class="choose-icon">↻</span>
-          <span class="choose-label">기존 설정</span>
-          <span class="choose-desc">{loadConfigs().length > 0 ? '저장된 설정을 불러옵니다' : '저장된 설정이 없습니다'}</span>
+          <span class="choose-label">이전 설정</span>
+          <span class="choose-desc">{loadConfigs().length > 0 ? `저장된 설정 ${loadConfigs().length}개` : '저장된 설정이 없습니다'}</span>
         </button>
       </div>
 
@@ -325,43 +338,56 @@
             <label for="config-name">설정 이름</label>
             <input id="config-name" type="text" bind:value={configName} placeholder="예: 사무실, 카페" />
           </div>
-          <div class="setting">
-            <label for="cam-pos">카메라 위치</label>
-            <select id="cam-pos" bind:value={cameraPosition}>
-              <option value="left">좌측</option>
-              <option value="front">정면</option>
-              <option value="right">우측</option>
-            </select>
+          <div class="setting-group">
+            <div class="setting">
+              <label for="cam-pos">카메라 위치</label>
+              <select id="cam-pos" bind:value={cameraPosition}>
+                <option value="left">좌측</option>
+                <option value="front">정면</option>
+                <option value="right">우측</option>
+              </select>
+            </div>
+            <p class="setting-help">{CAM_POS_DESC[cameraPosition]}</p>
           </div>
-          <div class="setting">
-            <label for="interval">검사 간격</label>
-            <select id="interval" bind:value={checkInterval}>
-              <option value={0}>연속</option>
-              <option value={1}>1초</option>
-              <option value={3}>3초</option>
-              <option value={5}>5초</option>
-              <option value={10}>10초</option>
-              <option value={15}>15초</option>
-              <option value={30}>30초</option>
-              <option value={60}>1분</option>
-            </select>
+          <div class="setting-group">
+            <div class="setting">
+              <label for="interval">검사 간격</label>
+              <select id="interval" bind:value={checkInterval}>
+                <option value={0}>연속</option>
+                <option value={1}>1초</option>
+                <option value={3}>3초</option>
+                <option value={5}>5초</option>
+                <option value={10}>10초</option>
+                <option value={15}>15초</option>
+                <option value={30}>30초</option>
+                <option value={60}>1분</option>
+              </select>
+            </div>
+            <p class="setting-help">자세를 얼마나 자주 확인할지 설정합니다</p>
           </div>
         </div>
-        <p class="hint">올바른 자세를 취한 후 캘리브레이션을 시작하세요.</p>
+        <div class="guide-box">
+          <p>화면에 올바른 자세가 보이는 상태에서 시작하세요.</p>
+          <p>3초 카운트다운 후 약 3초간 기준 자세를 기록합니다.</p>
+        </div>
         <div class="btn-row">
           <button class="btn-back" onclick={() => state = 'idle'}>뒤로</button>
           <button onclick={startCalibration} disabled={!cameraReady}>
-            {cameraReady ? "캘리브레이션 시작" : "카메라 로딩 중..."}
+            {cameraReady ? "기준 자세 등록" : "카메라 로딩 중..."}
           </button>
         </div>
       </div>
 
     {:else if state === "pick-config"}
+      <p class="hint">이전에 저장한 설정을 선택하면 바로 모니터링을 시작합니다.</p>
       <div class="config-list">
         {#each savedConfigs as config (config.id)}
           <div class="config-item">
             <button class="config-select" onclick={() => loadSavedConfig(config)}>
-              <span class="config-name">{config.name}</span>
+              <div class="config-info">
+                <span class="config-name">{config.name}</span>
+                <span class="config-date">{formatDate(config.createdAt)}</span>
+              </div>
               <span class="config-meta">
                 {CAM_POS_LABELS[config.cameraPosition]} · {formatInterval(config.checkInterval)}
               </span>
@@ -378,7 +404,7 @@
           <p class="countdown">{countdown}</p>
           <p>올바른 자세를 유지하세요</p>
         {:else}
-          <p class="collecting">기준값 수집 중...</p>
+          <p class="collecting">기준 자세 기록 중...</p>
         {/if}
       </div>
     {:else if state === "monitoring"}
@@ -387,7 +413,7 @@
           {paused ? '일시정지' : checkInterval === 0 ? '연속 검사 중' : `${checkInterval}초마다 검사 중`}
         </span>
         <div class="btn-row">
-          <button onclick={() => privacyMode = !privacyMode} class="btn-privacy" class:active={privacyMode}>
+          <button onclick={() => privacyMode = !privacyMode} class="btn-privacy" class:active={privacyMode} title="카메라 영상을 숨기고 뼈대만 표시합니다">
             {privacyMode ? '카메라 보기' : '프라이버시'}
           </button>
           <button onclick={togglePause} class="btn-pause">
@@ -483,6 +509,12 @@
     width: 100%;
     text-align: center;
   }
+  .intro {
+    color: #555;
+    font-size: 0.9rem;
+    margin: 0;
+    text-align: center;
+  }
 
   /* Choose screen */
   .choose-buttons {
@@ -544,6 +576,29 @@
     color: #555;
     margin: 0;
     font-size: 0.9rem;
+  }
+  .setting-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .setting-help {
+    color: #444;
+    font-size: 0.75rem;
+    margin: 0;
+    padding-left: 0.1rem;
+  }
+  .guide-box {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid #222;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    max-width: 360px;
+  }
+  .guide-box p {
+    color: #555;
+    font-size: 0.8rem;
+    margin: 0.15rem 0;
   }
   .setting {
     display: flex;
@@ -611,11 +666,20 @@
   .config-select:hover {
     background: #1a1a1a;
   }
+  .config-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+  }
   .config-name {
     font-size: 0.95rem;
     color: #ccc;
     font-weight: 500;
-    flex: 1;
+  }
+  .config-date {
+    font-size: 0.7rem;
+    color: #444;
   }
   .config-meta {
     font-size: 0.8rem;
