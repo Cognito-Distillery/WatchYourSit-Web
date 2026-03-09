@@ -9,12 +9,13 @@
     checkIntervalSec: number;
     cameraPosition: CameraPosition;
     postureStatus?: "neutral" | "warning" | "good";
+    privacyMode?: boolean;
     onMetrics?: (metrics: PostureMetrics) => void;
     onReady?: () => void;
     onError?: (msg: string) => void;
   }
 
-  let { running, checkIntervalSec, cameraPosition, postureStatus = "neutral", onMetrics, onReady, onError }: Props = $props();
+  let { running, checkIntervalSec, cameraPosition, postureStatus = "neutral", privacyMode = false, onMetrics, onReady, onError }: Props = $props();
 
   let videoEl: HTMLVideoElement;
   let canvasEl: HTMLCanvasElement;
@@ -71,7 +72,7 @@
   function mainLoop() {
     detect();
     if (lastResult) {
-      drawLandmarks(canvasEl, lastResult, postureStatus);
+      drawLandmarks(canvasEl, lastResult, postureStatus, privacyMode);
     }
     animFrameId = requestAnimationFrame(mainLoop);
   }
@@ -146,8 +147,8 @@
 </script>
 
 <div class="camera-container">
-  <video bind:this={videoEl} playsinline muted></video>
-  <canvas bind:this={canvasEl}></canvas>
+  <video bind:this={videoEl} playsinline muted class:hidden={privacyMode}></video>
+  <canvas bind:this={canvasEl} class:privacy={privacyMode}></canvas>
   <span class="fps">{fps} fps</span>
 </div>
 
@@ -164,6 +165,10 @@
     display: block;
     transform: scaleX(-1);
   }
+  video.hidden {
+    visibility: hidden;
+    position: absolute;
+  }
   canvas {
     position: absolute;
     top: 0;
@@ -171,6 +176,10 @@
     width: 100%;
     height: 100%;
     transform: scaleX(-1);
+  }
+  canvas.privacy {
+    position: relative;
+    background: #111;
   }
   .fps {
     position: absolute;

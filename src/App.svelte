@@ -23,6 +23,7 @@
   let messages: ChatMessage[] = $state([]);
   let postureStatus: "neutral" | "warning" | "good" = $state("neutral");
   let paused = $state(false);
+  let privacyMode = $state(false);
 
   let calibrationSamples: PostureMetrics[] = [];
   let baseline: CalibrationData | null = null;
@@ -222,6 +223,7 @@
       checkIntervalSec={state === "calibrating" ? 0 : checkInterval}
       {cameraPosition}
       {postureStatus}
+      {privacyMode}
       {onMetrics}
       onReady={onCameraReady}
       onError={onCameraError}
@@ -272,6 +274,9 @@
           {paused ? '일시정지' : checkInterval === 0 ? '연속 검사 중' : `${checkInterval}초마다 검사 중`}
         </span>
         <div class="btn-row">
+          <button onclick={() => privacyMode = !privacyMode} class="btn-privacy" class:active={privacyMode}>
+            {privacyMode ? '카메라 보기' : '프라이버시'}
+          </button>
           <button onclick={togglePause} class="btn-pause">
             {paused ? '재개' : '일시정지'}
           </button>
@@ -446,6 +451,21 @@
   .btn-recal:hover {
     border-color: #555;
     color: #999;
+  }
+  .btn-privacy {
+    background: transparent;
+    border: 1px solid #444;
+    color: #aaa;
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+  }
+  .btn-privacy:hover {
+    border-color: #666;
+    color: #ccc;
+  }
+  .btn-privacy.active {
+    border-color: #5a5aff;
+    color: #8a8aff;
   }
   .calibration-status {
     text-align: center;
